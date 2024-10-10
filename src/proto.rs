@@ -479,21 +479,7 @@ fn nt_in_memory() {
                 function_address - base_address as usize
             );
 
-            // Change memory protection to allow writing
             let mut old_protect = 0;
-            let protect_result = VirtualProtect(
-                base_address,
-                buffer.len(),
-                PAGE_READWRITE,
-                &mut old_protect,
-            );
-
-            if protect_result == 0 {
-                println!("Failed to change memory protection to PAGE_READWRITE");
-                return;
-            }
-
-            // At this point, you can modify the memory if needed
 
             // Change memory protection to allow execution (but not writing)
             let protect_result = VirtualProtect(
@@ -657,21 +643,7 @@ fn mem_to_mem() {
     if let Some(function_address) = function_address {
         println!("RtlGetVersion found at offset: 0x{:X}", function_address - buffer as usize);
 
-        // Change memory protection to allow writing
         let mut old_protect = 0;
-        let protect_result = unsafe { VirtualProtect(
-            buffer,
-            image_size,
-            PAGE_READWRITE,
-            &mut old_protect,
-        ) };
-
-        if protect_result == 0 {
-            println!("Failed to change memory protection to PAGE_READWRITE");
-            return;
-        }
-
-        // At this point, you can modify the memory if needed
 
         // Change memory protection to allow execution (but not writing)
         let protect_result = unsafe { VirtualProtect(
