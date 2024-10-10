@@ -7,7 +7,7 @@ use winapi::um::errhandlingapi::GetLastError;
 use std::fs::File;
 use std::io::Read;
 use winapi::um::memoryapi::{VirtualAlloc, VirtualProtect};
-use winapi::um::winnt::{MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, PAGE_READWRITE};
+use winapi::um::winnt::{MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, PAGE_READWRITE, RTL_OSVERSIONINFOW};
 use winapi::ctypes::c_void;
 
 
@@ -24,7 +24,7 @@ pub extern "system" fn Api() {
     // 5. Using a TEB->PEB->DllBase to get the function pointer and call the NT API
     // ?. Using a TEB->PEB->DllBase, then use assembly to make a syscall to NT API (this is only working for simple syscalls, will come back to it or add an example later)
     // 6. copy ntdll.dll to memory and locate functions in it using the ntdll exports table
-    // 7. Using dinvoke_rs and its several methods to make API calls
+    // ?. Using dinvoke_rs and its several methods to make API calls
 
     //ok end of methods
 
@@ -41,7 +41,7 @@ pub extern "system" fn Api() {
         println!("4. Using LdrGetProcedureAddress and LdrGetDllHandle to get the function pointer and call the API");
         println!("5. Using noldr to get the function pointer and call the API");
         println!("6. copy ntdll.dll to memory and locate functions in it using the ntdll exports table");
-        println!("99. Using NTDLL to get the version of the system");
+        println!("7. Copy ntdll from memory to a new buffer in memory and get the version of the system");
 
         print!("Enter the number of the method you want to use: ");
         io::stdout().flush().unwrap();
@@ -57,7 +57,8 @@ pub extern "system" fn Api() {
             3 => use_getprocaddress(),
             4 => use_ldrgetprocedureaddress(),
             5 => noldr_ntapi(),
-            6 => ntdll_in_memory(),
+            6 => nt_in_memory(),
+            7 => mem_to_mem(),
             99 => get_ntdll_version(),
             // ... (other cases)
             _ => println!("Invalid choice. Please select a number between 0 and 7."),
@@ -403,7 +404,7 @@ fn noldr_ntapi() {
 
 use winapi::um::winnt::{IMAGE_DOS_HEADER, IMAGE_NT_HEADERS, IMAGE_EXPORT_DIRECTORY};
 
-fn ntdll_in_memory() {
+fn nt_in_memory() {
     unsafe {
         // Load NTDLL into memory
         let mut file = File::open("C:\\Windows\\System32\\ntdll.dll").expect("Failed to open NTDLL");
@@ -498,3 +499,92 @@ fn ntdll_in_memory() {
         winapi::um::memoryapi::VirtualFree(base_address, 0, winapi::um::winnt::MEM_RELEASE);
     }
 }
+
+//now i'd like to get the teb then use the noldr function to get the DLLBase of ntdll.dll, then
+//copy the loaded ntdll from memory into a new buffer, and use the exports table on the new buffer
+//to find function addresses, then use the function address to call the function
+//we can call RtlGetVersion as a demonstration
+
+//we'll use noldr for the TEB walk, and then we'll use the exports table to find the address of the function
+
+fn mem_to_mem() {
+    //thi is not working. add debugging
+    // Get the TEB
+    let teb = get_teb();
+    println!("TEB: {:p}", teb);
+
+    let dll_base_address = get_dll_address("ntdll.dll".to_string(), teb).unwrap();
+    println!("DLL base address: {:p}", dll_base_address);
+
+    //copy the loaded ntdll from memory into a new buffer, don't open the file, just copy it from memory
+    //locate it by its base address and copy it into a new buffer
+    let mut buffer = vec![0; 0x1000];
+    unsafe { std::ptr::copy_nonoverlapping(dll_base_address as *const u8, buffer.as_mut_ptr(), buffer.len()); }
+
+    // Parse PE structure
+    let dos_header = buffer.as_ptr() as *const IMAGE_DOS_HEADER;
+    let nt_headers = (buffer.as_ptr() as usize + (unsafe { *dos_header }).e_lfanew as usize) as *const IMAGE_NT_HEADERS;
+    let optional_header = &(unsafe { *nt_headers }).OptionalHeader;
+
+    // Find export directory
+    let export_directory_rva = optional_header.DataDirectory[0].VirtualAddress;
+    let export_directory = (buffer.as_ptr() as usize + export_directory_rva as usize) as *const IMAGE_EXPORT_DIRECTORY;
+
+    // Parse export directory
+    let names = (buffer.as_ptr() as usize + (unsafe { *export_directory }).AddressOfNames as usize) as *const u32;
+    let functions = (buffer.as_ptr() as usize + (unsafe { *export_directory }).AddressOfFunctions as usize) as *const u32;
+    let ordinals = (buffer.as_ptr() as usize + (unsafe { *export_directory }).AddressOfNameOrdinals as usize) as *const u16;
+
+    // Find the RtlGetVersion function
+    let function_name = "RtlGetVersion";
+    let mut function_address = None;
+
+    for i in 0..(unsafe { *export_directory }).NumberOfNames {
+        let name_rva = unsafe { *names.offset(i as isize) };
+        let name = (buffer.as_ptr() as usize + name_rva as usize) as *const i8;
+        let name_str = unsafe { std::ffi::CStr::from_ptr(name).to_str().unwrap_or("") };
+
+        if name_str == function_name {
+            let ordinal = unsafe { *ordinals.offset(i as isize) } as usize;
+            let function_rva = unsafe { *functions.offset(ordinal as isize) };
+            function_address = Some(buffer.as_ptr() as usize + function_rva as usize);
+            break;
+        }
+    }
+
+    if let Some(function_address) = function_address {
+        println!("RtlGetVersion found at offset: 0x{:X}", function_address - buffer.as_ptr() as usize);
+
+        // Change memory protection to allow execution
+        let mut old_protect = 0;
+        unsafe { VirtualProtect(
+            buffer.as_ptr() as *mut _,
+            buffer.len(),
+            PAGE_EXECUTE_READWRITE,
+            &mut old_protect,
+        ) };
+
+        // Define the function type for RtlGetVersion
+        type RtlGetVersionFn = unsafe extern "system" fn(*mut RTL_OSVERSIONINFOW) -> NTSTATUS;
+
+        // Cast the function pointer
+        let rtl_get_version: RtlGetVersionFn = unsafe { std::mem::transmute(function_address) };
+
+        // Call the function
+        let mut os_version: RTL_OSVERSIONINFOW = unsafe { std::mem::zeroed() };
+        let status = unsafe { rtl_get_version(&mut os_version) };
+
+        if NT_SUCCESS(status.0) {
+            println!("OS Version: {}.{}.{}", os_version.dwMajorVersion, os_version.dwMinorVersion, os_version.dwBuildNumber);
+        } else {
+            println!("Failed to get OS version. Status: {:#x}", status.0 as u32);
+        }
+    } else {
+        println!("RtlGetVersion function not found");
+    }
+
+}
+
+    
+
+
