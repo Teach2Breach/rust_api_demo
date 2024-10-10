@@ -6,11 +6,14 @@ use std::fs::File;
 use std::io::Read;
 use std::os::windows::ffi::OsStringExt;
 use winapi::ctypes::c_void;
+use winapi::shared::ntdef::{HANDLE, NTSTATUS, PULONG, PVOID, ULONG};
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::memoryapi::{VirtualAlloc, VirtualProtect};
 use winapi::um::winnt::{
     MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_READWRITE, RTL_OSVERSIONINFOW,
 };
+
+use winapi::shared::basetsd::{PSIZE_T, SIZE_T, ULONG_PTR};
 
 #[no_mangle]
 pub extern "system" fn Api() {
@@ -181,7 +184,6 @@ use winapi::shared::minwindef::HMODULE;
 use winapi::shared::ntdef::UNICODE_STRING;
 use winapi::shared::ntdef::{NT_SUCCESS, STRING};
 use winapi::shared::ntstatus::STATUS_SUCCESS;
-use windows::Win32::Foundation::NTSTATUS;
 
 fn ldr_get_dll(dll_name: &str) -> HMODULE {
     // Initialize a null pointer to a handle.
@@ -389,9 +391,9 @@ fn noldr_ntapi() {
     unsafe {
         let mut system_time: LARGE_INTEGER = std::mem::zeroed();
         let status = nt_query_system_time(&mut system_time);
-        println!("Status: {:#x}", status.0 as u32);
+        println!("Status: {:#x}", status as u32);
 
-        if status.0 >= 0 {
+        if status >= 0 {
             // Check if the call was successful
             // Convert Windows file time to Unix timestamp
             let windows_ticks = system_time.QuadPart();
@@ -504,7 +506,7 @@ fn nt_in_memory() {
             let mut system_time: LARGE_INTEGER = std::mem::zeroed();
             let status = nt_query_system_time(&mut system_time);
 
-            if NT_SUCCESS(status.0) {
+            if NT_SUCCESS(status) {
                 // Convert Windows file time to Unix timestamp
                 let windows_ticks = system_time.QuadPart();
                 let unix_time = windows_ticks / 10_000_000 - 11_644_473_600;
@@ -517,10 +519,7 @@ fn nt_in_memory() {
                     datetime.format("%Y-%m-%d %H:%M:%S")
                 );
             } else {
-                println!(
-                    "Failed to query system time. Status: {:#x}",
-                    status.0 as u32
-                );
+                println!("Failed to query system time. Status: {:#x}", status as u32);
             }
         } else {
             println!("NtQuerySystemTime function not found");
@@ -567,33 +566,60 @@ fn mem_to_mem() {
     println!("DOS header e_lfanew: {:#x}", dos_header.e_lfanew);
 
     // Read NT headers to get the size of the image
-    let nt_headers = unsafe { 
+    let nt_headers = unsafe {
         &*((dll_base_address as usize + dos_header.e_lfanew as usize) as *const IMAGE_NT_HEADERS)
     };
     let image_size = nt_headers.OptionalHeader.SizeOfImage as usize;
     println!("Image size: {:#x}", image_size);
 
-    // Allocate a new buffer with proper permissions
-    let buffer = unsafe {
-        VirtualAlloc(
-            std::ptr::null_mut(),
-            image_size,
+    // Define NtCurrentProcess() as a constant
+    const NT_CURRENT_PROCESS: HANDLE = -1isize as HANDLE;
+
+    // Define the function type for NtAllocateVirtualMemory
+    type NtAllocateVirtualMemoryFn = unsafe extern "system" fn(
+        ProcessHandle: HANDLE,
+        BaseAddress: *mut *mut c_void,
+        ZeroBits: ULONG_PTR,
+        RegionSize: *mut SIZE_T,
+        AllocationType: ULONG,
+        Protect: ULONG,
+    ) -> NTSTATUS;
+
+    let function_address =
+        get_function_address(dll_base_address, "NtAllocateVirtualMemory").unwrap();
+    println!("NtAllocateVirtualMemory address: {:p}", function_address);
+
+    let nt_allocate_virtual_memory: NtAllocateVirtualMemoryFn =
+        unsafe { std::mem::transmute(function_address) };
+
+    let mut base_address: *mut c_void = std::ptr::null_mut();
+    let mut region_size: SIZE_T = image_size;
+
+    let status = unsafe {
+        nt_allocate_virtual_memory(
+            NT_CURRENT_PROCESS,
+            &mut base_address,
+            0,
+            &mut region_size,
             MEM_COMMIT | MEM_RESERVE,
             PAGE_READWRITE,
         )
     };
-    if buffer.is_null() {
-        println!("Failed to allocate memory for the new buffer");
+
+    if !NT_SUCCESS(status) {
+        println!(
+            "Failed to allocate memory for the new buffer. Status: {:#x}",
+            status
+        );
         return;
     }
 
+    let buffer = base_address;
+    println!("Allocated buffer at: {:p}", buffer);
+
     // Copy NTDLL to the new buffer
     unsafe {
-        ptr::copy_nonoverlapping(
-            dll_base_address as *const u8,
-            buffer as *mut u8,
-            image_size,
-        );
+        ptr::copy_nonoverlapping(dll_base_address as *const u8, buffer as *mut u8, image_size);
     }
     println!("Copied {} bytes from NTDLL to new buffer", image_size);
 
@@ -616,13 +642,16 @@ fn mem_to_mem() {
     // After verifying NT headers signature
     let optional_header = &nt_headers_safe.OptionalHeader;
     let export_directory_rva = optional_header.DataDirectory[0].VirtualAddress as usize;
-    let export_directory = (buffer as usize + export_directory_rva) as *const IMAGE_EXPORT_DIRECTORY;
+    let export_directory =
+        (buffer as usize + export_directory_rva) as *const IMAGE_EXPORT_DIRECTORY;
 
     let export_directory_safe = unsafe { ptr::read(export_directory) };
 
     let names = (buffer as usize + export_directory_safe.AddressOfNames as usize) as *const u32;
-    let functions = (buffer as usize + export_directory_safe.AddressOfFunctions as usize) as *const u32;
-    let ordinals = (buffer as usize + export_directory_safe.AddressOfNameOrdinals as usize) as *const u16;
+    let functions =
+        (buffer as usize + export_directory_safe.AddressOfFunctions as usize) as *const u32;
+    let ordinals =
+        (buffer as usize + export_directory_safe.AddressOfNameOrdinals as usize) as *const u16;
 
     let function_name = "RtlGetVersion";
     let mut function_address = None;
@@ -641,20 +670,49 @@ fn mem_to_mem() {
     }
 
     if let Some(function_address) = function_address {
-        println!("RtlGetVersion found at offset: 0x{:X}", function_address - buffer as usize);
+        println!(
+            "RtlGetVersion found at offset: 0x{:X}",
+            function_address - buffer as usize
+        );
 
         let mut old_protect = 0;
 
         // Change memory protection to allow execution (but not writing)
-        let protect_result = unsafe { VirtualProtect(
-            buffer,
-            image_size,
-            PAGE_EXECUTE_READ,
-            &mut old_protect,
-        ) };
+        // Define the function type for NtProtectVirtualMemory
+        type NtProtectVirtualMemoryFn = unsafe extern "system" fn(
+            ProcessHandle: HANDLE,
+            BaseAddress: *mut PVOID,
+            RegionSize: PSIZE_T,
+            NewProtect: ULONG,
+            OldProtect: PULONG,
+        ) -> NTSTATUS;
 
-        if protect_result == 0 {
-            println!("Failed to change memory protection to PAGE_EXECUTE_READ");
+        // Get the address of NtProtectVirtualMemory
+        let nt_protect_virtual_memory_address =
+            get_function_address(dll_base_address, "NtProtectVirtualMemory").unwrap();
+        let nt_protect_virtual_memory: NtProtectVirtualMemoryFn =
+            unsafe { std::mem::transmute(nt_protect_virtual_memory_address) };
+
+        // Prepare parameters for NtProtectVirtualMemory
+        let mut base_address = buffer as PVOID;
+        let mut region_size: SIZE_T = image_size;
+
+        // Change memory protection to allow execution (but not writing)
+        let status = unsafe {
+            nt_protect_virtual_memory(
+                NT_CURRENT_PROCESS,
+                &mut base_address,
+                &mut region_size,
+                PAGE_EXECUTE_READ,
+                &mut old_protect,
+            )
+        };
+
+        if !NT_SUCCESS(status) {
+            println!(
+                "Failed to change memory protection to PAGE_EXECUTE_READ. Status: {:#x}",
+                status
+            );
             return;
         }
 
@@ -666,27 +724,53 @@ fn mem_to_mem() {
 
         let status = unsafe { rtl_get_version(&mut version_info) };
 
-        if NT_SUCCESS(status.0) {
-            println!("Windows version: {}.{}.{}", version_info.dwMajorVersion, version_info.dwMinorVersion, version_info.dwBuildNumber);
+        if NT_SUCCESS(status) {
+            println!(
+                "Windows version: {}.{}.{}",
+                version_info.dwMajorVersion,
+                version_info.dwMinorVersion,
+                version_info.dwBuildNumber
+            );
         } else {
-            println!("Failed to get version. Status: {:#x}", status.0 as u32);
+            println!("Failed to get version. Status: {:#x}", status as u32);
         }
 
-        // Restore the original protection
-        unsafe {
-            VirtualProtect(
-                buffer,
-                image_size,
-                old_protect,
-                &mut old_protect,
-            );
-        }
     } else {
         println!("RtlGetVersion function not found");
     }
 
-    // Free the allocated memory
-    unsafe {
-        winapi::um::memoryapi::VirtualFree(buffer, 0, winapi::um::winnt::MEM_RELEASE);
+    // Free the allocated buffer
+    type NtFreeVirtualMemoryFn = unsafe extern "system" fn(
+        ProcessHandle: HANDLE,
+        BaseAddress: *mut PVOID,
+        RegionSize: PSIZE_T,
+        FreeType: ULONG,
+    ) -> NTSTATUS;
+
+    // Get the address of NtFreeVirtualMemory
+    let nt_free_virtual_memory_address =
+        get_function_address(dll_base_address, "NtFreeVirtualMemory").unwrap();
+    let nt_free_virtual_memory: NtFreeVirtualMemoryFn =
+        unsafe { std::mem::transmute(nt_free_virtual_memory_address) };
+
+    // Prepare parameters for NtFreeVirtualMemory
+    let mut base_address = buffer as PVOID;
+    let mut region_size: SIZE_T = 0; // When freeing entire region, this should be 0
+    let free_type = winapi::um::winnt::MEM_RELEASE;
+
+    // Free the virtual memory
+    let status = unsafe {
+        nt_free_virtual_memory(
+            NT_CURRENT_PROCESS,
+            &mut base_address,
+            &mut region_size,
+            free_type,
+        )
+    };
+
+    if NT_SUCCESS(status) {
+        println!("Successfully freed virtual memory");
+    } else {
+        println!("Failed to free virtual memory. Status: {:#x}", status);
     }
 }
