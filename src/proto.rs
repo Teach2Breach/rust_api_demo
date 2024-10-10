@@ -2,14 +2,15 @@ use std::io::{self, Write};
 use std::ptr::null_mut;
 //use winapi::um::winnt::WCHAR;
 use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
-use winapi::um::errhandlingapi::GetLastError;
 use std::fs::File;
 use std::io::Read;
-use winapi::um::memoryapi::{VirtualAlloc, VirtualProtect};
-use winapi::um::winnt::{MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, PAGE_READWRITE, RTL_OSVERSIONINFOW};
+use std::os::windows::ffi::OsStringExt;
 use winapi::ctypes::c_void;
-
+use winapi::um::errhandlingapi::GetLastError;
+use winapi::um::memoryapi::{VirtualAlloc, VirtualProtect};
+use winapi::um::winnt::{
+    MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_READWRITE, RTL_OSVERSIONINFOW,
+};
 
 #[no_mangle]
 pub extern "system" fn Api() {
@@ -40,8 +41,12 @@ pub extern "system" fn Api() {
         println!("3. Using GetProcAddress and GetModuleHandleA to get the function pointer and call the API");
         println!("4. Using LdrGetProcedureAddress and LdrGetDllHandle to get the function pointer and call the API");
         println!("5. Using noldr to get the function pointer and call the API");
-        println!("6. copy ntdll.dll to memory and locate functions in it using the ntdll exports table");
-        println!("7. Copy ntdll from memory to a new buffer in memory and get the version of the system");
+        println!(
+            "6. Copy ntdll.dll to memory and locate functions in it using the ntdll exports table"
+        );
+        println!(
+            "7. Copy ntdll from memory to a new buffer in memory and get the version of the system"
+        );
 
         print!("Enter the number of the method you want to use: ");
         io::stdout().flush().unwrap();
@@ -168,15 +173,15 @@ use ntapi::ntldr::LdrGetDllHandle;
 use ntapi::ntldr::LdrGetProcedureAddress;
 use ntapi::ntrtl::RtlInitUnicodeString;
 use ntapi::ntrtl::RtlUnicodeStringToAnsiString;
-use windows::Win32::Foundation::NTSTATUS;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use winapi::ctypes::c_void as winapi_void;
 use winapi::shared::minwindef::FARPROC;
 use winapi::shared::minwindef::HMODULE;
-use winapi::shared::ntdef::{NT_SUCCESS, STRING};
 use winapi::shared::ntdef::UNICODE_STRING;
+use winapi::shared::ntdef::{NT_SUCCESS, STRING};
 use winapi::shared::ntstatus::STATUS_SUCCESS;
+use windows::Win32::Foundation::NTSTATUS;
 
 fn ldr_get_dll(dll_name: &str) -> HMODULE {
     // Initialize a null pointer to a handle.
@@ -276,10 +281,10 @@ fn use_ldrgetprocedureaddress() {
     }
 }
 
-use winapi::um::libloaderapi::{GetModuleHandleW, GetModuleFileNameW};
+use std::mem;
+use winapi::um::libloaderapi::{GetModuleFileNameW, GetModuleHandleW};
 use winapi::um::winver::{GetFileVersionInfoSizeW, GetFileVersionInfoW};
 use windows::Win32::Storage::FileSystem::VS_FIXEDFILEINFO;
-use std::mem;
 
 pub fn get_ntdll_version() {
     unsafe {
@@ -358,10 +363,10 @@ fn wide_string(s: &str) -> Vec<u16> {
 // ... (implement other methods)
 
 //implementing the methods to get the PEB and TEB using noldr
-use noldr::{get_teb, get_dll_address, get_function_address};
-use winapi::shared::ntdef::LARGE_INTEGER;
 use chrono::{DateTime, Local};
+use noldr::{get_dll_address, get_function_address, get_teb};
 use std::time::{Duration, UNIX_EPOCH};
+use winapi::shared::ntdef::LARGE_INTEGER;
 
 fn noldr_ntapi() {
     let teb = get_teb();
@@ -370,14 +375,15 @@ fn noldr_ntapi() {
     let dll_base_address = get_dll_address("ntdll.dll".to_string(), teb).unwrap();
     println!("DLL base address: {:p}", dll_base_address);
 
-    let function_address = get_function_address(dll_base_address,  "NtQuerySystemTime").unwrap();
+    let function_address = get_function_address(dll_base_address, "NtQuerySystemTime").unwrap();
     println!("Function address: {:p}", function_address);
 
     // Define the function type for NtQuerySystemTime
     type NtQuerySystemTimeFn = unsafe extern "system" fn(*mut LARGE_INTEGER) -> NTSTATUS;
 
     // Cast the function pointer
-    let nt_query_system_time: NtQuerySystemTimeFn = unsafe { std::mem::transmute(function_address) };
+    let nt_query_system_time: NtQuerySystemTimeFn =
+        unsafe { std::mem::transmute(function_address) };
 
     // Call the function
     unsafe {
@@ -385,7 +391,8 @@ fn noldr_ntapi() {
         let status = nt_query_system_time(&mut system_time);
         println!("Status: {:#x}", status.0 as u32);
 
-        if status.0 >= 0 { // Check if the call was successful
+        if status.0 >= 0 {
+            // Check if the call was successful
             // Convert Windows file time to Unix timestamp
             let windows_ticks = system_time.QuadPart();
             let unix_time = windows_ticks / 10_000_000 - 11_644_473_600;
@@ -393,7 +400,10 @@ fn noldr_ntapi() {
             let system_time = UNIX_EPOCH + Duration::from_secs(unix_time as u64);
             let datetime: DateTime<Local> = system_time.into();
 
-            println!("Current system time: {}", datetime.format("%Y-%m-%d %H:%M:%S"));
+            println!(
+                "Current system time: {}",
+                datetime.format("%Y-%m-%d %H:%M:%S")
+            );
         } else {
             println!("Failed to query system time");
         }
@@ -402,12 +412,13 @@ fn noldr_ntapi() {
 
 //6. copy ntdll.dll to memory and locate functions in it using the ntdll exports table
 
-use winapi::um::winnt::{IMAGE_DOS_HEADER, IMAGE_NT_HEADERS, IMAGE_EXPORT_DIRECTORY};
+use winapi::um::winnt::{IMAGE_DOS_HEADER, IMAGE_EXPORT_DIRECTORY, IMAGE_NT_HEADERS};
 
 fn nt_in_memory() {
     unsafe {
         // Load NTDLL into memory
-        let mut file = File::open("C:\\Windows\\System32\\ntdll.dll").expect("Failed to open NTDLL");
+        let mut file =
+            File::open("C:\\Windows\\System32\\ntdll.dll").expect("Failed to open NTDLL");
         let mut buffer = Vec::new();
         file.read_to_end(&mut buffer).expect("Failed to read NTDLL");
 
@@ -428,17 +439,22 @@ fn nt_in_memory() {
 
         // Parse PE structure
         let dos_header = base_address as *const IMAGE_DOS_HEADER;
-        let nt_headers = (base_address as usize + (*dos_header).e_lfanew as usize) as *const IMAGE_NT_HEADERS;
+        let nt_headers =
+            (base_address as usize + (*dos_header).e_lfanew as usize) as *const IMAGE_NT_HEADERS;
         let optional_header = &(*nt_headers).OptionalHeader;
 
         // Find export directory
         let export_directory_rva = optional_header.DataDirectory[0].VirtualAddress;
-        let export_directory = (base_address as usize + export_directory_rva as usize) as *const IMAGE_EXPORT_DIRECTORY;
+        let export_directory = (base_address as usize + export_directory_rva as usize)
+            as *const IMAGE_EXPORT_DIRECTORY;
 
         // Parse export directory
-        let names = (base_address as usize + (*export_directory).AddressOfNames as usize) as *const u32;
-        let functions = (base_address as usize + (*export_directory).AddressOfFunctions as usize) as *const u32;
-        let ordinals = (base_address as usize + (*export_directory).AddressOfNameOrdinals as usize) as *const u16;
+        let names =
+            (base_address as usize + (*export_directory).AddressOfNames as usize) as *const u32;
+        let functions =
+            (base_address as usize + (*export_directory).AddressOfFunctions as usize) as *const u32;
+        let ordinals = (base_address as usize + (*export_directory).AddressOfNameOrdinals as usize)
+            as *const u16;
 
         // Find the NtQuerySystemTime function
         let function_name = "NtQuerySystemTime";
@@ -458,27 +474,50 @@ fn nt_in_memory() {
         }
 
         if let Some(function_address) = function_address {
-            println!("NtQuerySystemTime found at offset: 0x{:X}", function_address - base_address as usize);
+            println!(
+                "NtQuerySystemTime found at offset: 0x{:X}",
+                function_address - base_address as usize
+            );
 
-            // Change memory protection to allow execution
+            // Change memory protection to allow writing
             let mut old_protect = 0;
-            VirtualProtect(
+            let protect_result = VirtualProtect(
                 base_address,
                 buffer.len(),
-                PAGE_EXECUTE_READWRITE,
+                PAGE_READWRITE,
                 &mut old_protect,
             );
 
+            if protect_result == 0 {
+                println!("Failed to change memory protection to PAGE_READWRITE");
+                return;
+            }
+
+            // At this point, you can modify the memory if needed
+
+            // Change memory protection to allow execution (but not writing)
+            let protect_result = VirtualProtect(
+                base_address,
+                buffer.len(),
+                PAGE_EXECUTE_READ,
+                &mut old_protect,
+            );
+
+            if protect_result == 0 {
+                println!("Failed to change memory protection to PAGE_EXECUTE_READ");
+                return;
+            }
+
             // Define the function type for NtQuerySystemTime
             type NtQuerySystemTimeFn = unsafe extern "system" fn(*mut LARGE_INTEGER) -> NTSTATUS;
-            
+
             // Cast the function pointer
             let nt_query_system_time: NtQuerySystemTimeFn = std::mem::transmute(function_address);
-            
+
             // Call the function
             let mut system_time: LARGE_INTEGER = std::mem::zeroed();
             let status = nt_query_system_time(&mut system_time);
-            
+
             if NT_SUCCESS(status.0) {
                 // Convert Windows file time to Unix timestamp
                 let windows_ticks = system_time.QuadPart();
@@ -487,9 +526,15 @@ fn nt_in_memory() {
                 let system_time = UNIX_EPOCH + Duration::from_secs(unix_time as u64);
                 let datetime: DateTime<Local> = system_time.into();
 
-                println!("Current system time: {}", datetime.format("%Y-%m-%d %H:%M:%S"));
+                println!(
+                    "Current system time: {}",
+                    datetime.format("%Y-%m-%d %H:%M:%S")
+                );
             } else {
-                println!("Failed to query system time. Status: {:#x}", status.0 as u32);
+                println!(
+                    "Failed to query system time. Status: {:#x}",
+                    status.0 as u32
+                );
             }
         } else {
             println!("NtQuerySystemTime function not found");
@@ -507,84 +552,169 @@ fn nt_in_memory() {
 
 //we'll use noldr for the TEB walk, and then we'll use the exports table to find the address of the function
 
+use std::ptr;
+
 fn mem_to_mem() {
-    //thi is not working. add debugging
+    println!("Starting mem_to_mem function");
+
     // Get the TEB
     let teb = get_teb();
     println!("TEB: {:p}", teb);
 
-    let dll_base_address = get_dll_address("ntdll.dll".to_string(), teb).unwrap();
+    if teb.is_null() {
+        println!("TEB is null, aborting");
+        return;
+    }
+
+    let dll_base_address = match get_dll_address("ntdll.dll".to_string(), teb) {
+        Some(addr) => addr,
+        None => {
+            println!("Failed to get NTDLL base address");
+            return;
+        }
+    };
     println!("DLL base address: {:p}", dll_base_address);
 
-    //copy the loaded ntdll from memory into a new buffer, don't open the file, just copy it from memory
-    //locate it by its base address and copy it into a new buffer
-    let mut buffer = vec![0; 0x1000];
-    unsafe { std::ptr::copy_nonoverlapping(dll_base_address as *const u8, buffer.as_mut_ptr(), buffer.len()); }
+    // Safely read the DOS header
+    let dos_header = unsafe { *(dll_base_address as *const IMAGE_DOS_HEADER) };
+    println!("DOS header e_magic: {:#x}", dos_header.e_magic);
+    println!("DOS header e_lfanew: {:#x}", dos_header.e_lfanew);
 
-    // Parse PE structure
-    let dos_header = buffer.as_ptr() as *const IMAGE_DOS_HEADER;
-    let nt_headers = (buffer.as_ptr() as usize + (unsafe { *dos_header }).e_lfanew as usize) as *const IMAGE_NT_HEADERS;
-    let optional_header = &(unsafe { *nt_headers }).OptionalHeader;
+    // Read NT headers to get the size of the image
+    let nt_headers = unsafe { 
+        &*((dll_base_address as usize + dos_header.e_lfanew as usize) as *const IMAGE_NT_HEADERS)
+    };
+    let image_size = nt_headers.OptionalHeader.SizeOfImage as usize;
+    println!("Image size: {:#x}", image_size);
 
-    // Find export directory
-    let export_directory_rva = optional_header.DataDirectory[0].VirtualAddress;
-    let export_directory = (buffer.as_ptr() as usize + export_directory_rva as usize) as *const IMAGE_EXPORT_DIRECTORY;
+    // Allocate a new buffer with proper permissions
+    let buffer = unsafe {
+        VirtualAlloc(
+            std::ptr::null_mut(),
+            image_size,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        )
+    };
+    if buffer.is_null() {
+        println!("Failed to allocate memory for the new buffer");
+        return;
+    }
 
-    // Parse export directory
-    let names = (buffer.as_ptr() as usize + (unsafe { *export_directory }).AddressOfNames as usize) as *const u32;
-    let functions = (buffer.as_ptr() as usize + (unsafe { *export_directory }).AddressOfFunctions as usize) as *const u32;
-    let ordinals = (buffer.as_ptr() as usize + (unsafe { *export_directory }).AddressOfNameOrdinals as usize) as *const u16;
+    // Copy NTDLL to the new buffer
+    unsafe {
+        ptr::copy_nonoverlapping(
+            dll_base_address as *const u8,
+            buffer as *mut u8,
+            image_size,
+        );
+    }
+    println!("Copied {} bytes from NTDLL to new buffer", image_size);
 
-    // Find the RtlGetVersion function
+    // Parse PE structure in the new buffer
+    let nt_headers_offset = dos_header.e_lfanew as usize;
+    println!("NT headers offset: {:#x}", nt_headers_offset);
+
+    let nt_headers = (buffer as usize + nt_headers_offset) as *const IMAGE_NT_HEADERS;
+
+    // Safely read NT headers
+    let nt_headers_safe = unsafe { ptr::read(nt_headers) };
+    println!("NT headers signature: {:#x}", nt_headers_safe.Signature);
+
+    if nt_headers_safe.Signature != 0x4550 {
+        // "PE\0\0"
+        println!("Invalid NT headers signature");
+        return;
+    }
+
+    // After verifying NT headers signature
+    let optional_header = &nt_headers_safe.OptionalHeader;
+    let export_directory_rva = optional_header.DataDirectory[0].VirtualAddress as usize;
+    let export_directory = (buffer as usize + export_directory_rva) as *const IMAGE_EXPORT_DIRECTORY;
+
+    let export_directory_safe = unsafe { ptr::read(export_directory) };
+
+    let names = (buffer as usize + export_directory_safe.AddressOfNames as usize) as *const u32;
+    let functions = (buffer as usize + export_directory_safe.AddressOfFunctions as usize) as *const u32;
+    let ordinals = (buffer as usize + export_directory_safe.AddressOfNameOrdinals as usize) as *const u16;
+
     let function_name = "RtlGetVersion";
     let mut function_address = None;
 
-    for i in 0..(unsafe { *export_directory }).NumberOfNames {
+    for i in 0..export_directory_safe.NumberOfNames {
         let name_rva = unsafe { *names.offset(i as isize) };
-        let name = (buffer.as_ptr() as usize + name_rva as usize) as *const i8;
+        let name = (buffer as usize + name_rva as usize) as *const i8;
         let name_str = unsafe { std::ffi::CStr::from_ptr(name).to_str().unwrap_or("") };
 
         if name_str == function_name {
             let ordinal = unsafe { *ordinals.offset(i as isize) } as usize;
             let function_rva = unsafe { *functions.offset(ordinal as isize) };
-            function_address = Some(buffer.as_ptr() as usize + function_rva as usize);
+            function_address = Some(buffer as usize + function_rva as usize);
             break;
         }
     }
 
     if let Some(function_address) = function_address {
-        println!("RtlGetVersion found at offset: 0x{:X}", function_address - buffer.as_ptr() as usize);
+        println!("RtlGetVersion found at offset: 0x{:X}", function_address - buffer as usize);
 
-        // Change memory protection to allow execution
+        // Change memory protection to allow writing
         let mut old_protect = 0;
-        unsafe { VirtualProtect(
-            buffer.as_ptr() as *mut _,
-            buffer.len(),
-            PAGE_EXECUTE_READWRITE,
+        let protect_result = unsafe { VirtualProtect(
+            buffer,
+            image_size,
+            PAGE_READWRITE,
             &mut old_protect,
         ) };
 
-        // Define the function type for RtlGetVersion
-        type RtlGetVersionFn = unsafe extern "system" fn(*mut RTL_OSVERSIONINFOW) -> NTSTATUS;
+        if protect_result == 0 {
+            println!("Failed to change memory protection to PAGE_READWRITE");
+            return;
+        }
 
-        // Cast the function pointer
+        // At this point, you can modify the memory if needed
+
+        // Change memory protection to allow execution (but not writing)
+        let protect_result = unsafe { VirtualProtect(
+            buffer,
+            image_size,
+            PAGE_EXECUTE_READ,
+            &mut old_protect,
+        ) };
+
+        if protect_result == 0 {
+            println!("Failed to change memory protection to PAGE_EXECUTE_READ");
+            return;
+        }
+
+        type RtlGetVersionFn = unsafe extern "system" fn(*mut RTL_OSVERSIONINFOW) -> NTSTATUS;
         let rtl_get_version: RtlGetVersionFn = unsafe { std::mem::transmute(function_address) };
 
-        // Call the function
-        let mut os_version: RTL_OSVERSIONINFOW = unsafe { std::mem::zeroed() };
-        let status = unsafe { rtl_get_version(&mut os_version) };
+        let mut version_info: RTL_OSVERSIONINFOW = unsafe { std::mem::zeroed() };
+        version_info.dwOSVersionInfoSize = std::mem::size_of::<RTL_OSVERSIONINFOW>() as u32;
+
+        let status = unsafe { rtl_get_version(&mut version_info) };
 
         if NT_SUCCESS(status.0) {
-            println!("OS Version: {}.{}.{}", os_version.dwMajorVersion, os_version.dwMinorVersion, os_version.dwBuildNumber);
+            println!("Windows version: {}.{}.{}", version_info.dwMajorVersion, version_info.dwMinorVersion, version_info.dwBuildNumber);
         } else {
-            println!("Failed to get OS version. Status: {:#x}", status.0 as u32);
+            println!("Failed to get version. Status: {:#x}", status.0 as u32);
+        }
+
+        // Restore the original protection
+        unsafe {
+            VirtualProtect(
+                buffer,
+                image_size,
+                old_protect,
+                &mut old_protect,
+            );
         }
     } else {
         println!("RtlGetVersion function not found");
     }
 
+    // Free the allocated memory
+    unsafe {
+        winapi::um::memoryapi::VirtualFree(buffer, 0, winapi::um::winnt::MEM_RELEASE);
+    }
 }
-
-    
-
-
