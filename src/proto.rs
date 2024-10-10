@@ -16,8 +16,8 @@ pub extern "system" fn Api() {
     // 3. using GetProcAddress and GetModuleHandleA to get the function pointer and call the API
     // 4. Using LdrGetProcedureAddress and LdrGetDllHandle to get the function pointer and call the API
     // 5. Using a TEB->PEB->LDR_DATA_TABLE_ENTRY->DllBase to get the function pointer and call the API
-    // 6. Using a TEB->PEB->LDR_DATA_TABLE_ENTRY->DllBase, then use assembly to make a syscall to NT API
-    // 7. Using dinvoke_rs and its several methods to make API calls
+    // ?. Using a TEB->PEB->LDR_DATA_TABLE_ENTRY->DllBase, then use assembly to make a syscall to NT API (this is only working for simple syscalls, will come back to it or add an example later)
+    // 6. Using dinvoke_rs and its several methods to make API calls
 
     //ok end of methods
 
@@ -32,6 +32,7 @@ pub extern "system" fn Api() {
         println!("2. Using ntapi crate");
         println!("3. Using GetProcAddress and GetModuleHandleA to get the function pointer and call the API");
         println!("4. Using LdrGetProcedureAddress and LdrGetDllHandle to get the function pointer and call the API");
+        println!("5. Using noldr to get the function pointer and call the API");
         println!("99. Using NTDLL to get the version of the system");
 
         print!("Enter the number of the method you want to use: ");
@@ -47,6 +48,7 @@ pub extern "system" fn Api() {
             2 => use_ntapi(),
             3 => use_getprocaddress(),
             4 => use_ldrgetprocedureaddress(),
+            5 => noldr_ntapi(),
             99 => get_ntdll_version(),
             // ... (other cases)
             _ => println!("Invalid choice. Please select a number between 0 and 7."),
@@ -157,6 +159,7 @@ use ntapi::ntldr::LdrGetDllHandle;
 use ntapi::ntldr::LdrGetProcedureAddress;
 use ntapi::ntrtl::RtlInitUnicodeString;
 use ntapi::ntrtl::RtlUnicodeStringToAnsiString;
+use windows::Win32::Foundation::NTSTATUS;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use winapi::ctypes::c_void as winapi_void;
@@ -344,3 +347,46 @@ fn wide_string(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 // ... (implement other methods)
+
+//implementing the methods to get the PEB and TEB using noldr
+use noldr::{get_teb, get_dll_address, get_function_address};
+use winapi::shared::ntdef::LARGE_INTEGER;
+use chrono::{DateTime, Local};
+use std::time::{Duration, UNIX_EPOCH};
+
+fn noldr_ntapi() {
+    let teb = get_teb();
+    println!("TEB: {:p}", teb);
+
+    let dll_base_address = get_dll_address("ntdll.dll".to_string(), teb).unwrap();
+    println!("DLL base address: {:p}", dll_base_address);
+
+    let function_address = get_function_address(dll_base_address,  "NtQuerySystemTime").unwrap();
+    println!("Function address: {:p}", function_address);
+
+    // Define the function type for NtQuerySystemTime
+    type NtQuerySystemTimeFn = unsafe extern "system" fn(*mut LARGE_INTEGER) -> NTSTATUS;
+
+    // Cast the function pointer
+    let nt_query_system_time: NtQuerySystemTimeFn = unsafe { std::mem::transmute(function_address) };
+
+    // Call the function
+    unsafe {
+        let mut system_time: LARGE_INTEGER = std::mem::zeroed();
+        let status = nt_query_system_time(&mut system_time);
+        println!("Status: {:#x}", status.0 as u32);
+
+        if status.0 >= 0 { // Check if the call was successful
+            // Convert Windows file time to Unix timestamp
+            let windows_ticks = system_time.QuadPart();
+            let unix_time = windows_ticks / 10_000_000 - 11_644_473_600;
+
+            let system_time = UNIX_EPOCH + Duration::from_secs(unix_time as u64);
+            let datetime: DateTime<Local> = system_time.into();
+
+            println!("Current system time: {}", datetime.format("%Y-%m-%d %H:%M:%S"));
+        } else {
+            println!("Failed to query system time");
+        }
+    }
+}
