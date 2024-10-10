@@ -4,6 +4,12 @@ use std::ptr::null_mut;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use winapi::um::errhandlingapi::GetLastError;
+use std::fs::File;
+use std::io::Read;
+use winapi::um::memoryapi::{VirtualAlloc, VirtualProtect};
+use winapi::um::winnt::{MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, PAGE_READWRITE};
+use winapi::ctypes::c_void;
+
 
 #[no_mangle]
 pub extern "system" fn Api() {
@@ -15,9 +21,10 @@ pub extern "system" fn Api() {
     // 2. using ntapi crate
     // 3. using GetProcAddress and GetModuleHandleA to get the function pointer and call the API
     // 4. Using LdrGetProcedureAddress and LdrGetDllHandle to get the function pointer and call the API
-    // 5. Using a TEB->PEB->LDR_DATA_TABLE_ENTRY->DllBase to get the function pointer and call the API
-    // ?. Using a TEB->PEB->LDR_DATA_TABLE_ENTRY->DllBase, then use assembly to make a syscall to NT API (this is only working for simple syscalls, will come back to it or add an example later)
-    // 6. Using dinvoke_rs and its several methods to make API calls
+    // 5. Using a TEB->PEB->DllBase to get the function pointer and call the NT API
+    // ?. Using a TEB->PEB->DllBase, then use assembly to make a syscall to NT API (this is only working for simple syscalls, will come back to it or add an example later)
+    // 6. copy ntdll.dll to memory and locate functions in it using the ntdll exports table
+    // 7. Using dinvoke_rs and its several methods to make API calls
 
     //ok end of methods
 
@@ -33,6 +40,7 @@ pub extern "system" fn Api() {
         println!("3. Using GetProcAddress and GetModuleHandleA to get the function pointer and call the API");
         println!("4. Using LdrGetProcedureAddress and LdrGetDllHandle to get the function pointer and call the API");
         println!("5. Using noldr to get the function pointer and call the API");
+        println!("6. copy ntdll.dll to memory and locate functions in it using the ntdll exports table");
         println!("99. Using NTDLL to get the version of the system");
 
         print!("Enter the number of the method you want to use: ");
@@ -49,6 +57,7 @@ pub extern "system" fn Api() {
             3 => use_getprocaddress(),
             4 => use_ldrgetprocedureaddress(),
             5 => noldr_ntapi(),
+            6 => ntdll_in_memory(),
             99 => get_ntdll_version(),
             // ... (other cases)
             _ => println!("Invalid choice. Please select a number between 0 and 7."),
@@ -116,7 +125,6 @@ fn use_ntapi() {
 }
 
 // 3. Using GetProcAddress and GetModuleHandleA to get the function pointer and call the API
-use winapi::ctypes::c_void;
 use winapi::um::libloaderapi::GetModuleHandleA;
 use winapi::um::libloaderapi::GetProcAddress;
 use winapi::um::winuser::MB_OK;
@@ -165,7 +173,7 @@ use std::os::windows::ffi::OsStrExt;
 use winapi::ctypes::c_void as winapi_void;
 use winapi::shared::minwindef::FARPROC;
 use winapi::shared::minwindef::HMODULE;
-use winapi::shared::ntdef::STRING;
+use winapi::shared::ntdef::{NT_SUCCESS, STRING};
 use winapi::shared::ntdef::UNICODE_STRING;
 use winapi::shared::ntstatus::STATUS_SUCCESS;
 
@@ -388,5 +396,105 @@ fn noldr_ntapi() {
         } else {
             println!("Failed to query system time");
         }
+    }
+}
+
+//6. copy ntdll.dll to memory and locate functions in it using the ntdll exports table
+
+use winapi::um::winnt::{IMAGE_DOS_HEADER, IMAGE_NT_HEADERS, IMAGE_EXPORT_DIRECTORY};
+
+fn ntdll_in_memory() {
+    unsafe {
+        // Load NTDLL into memory
+        let mut file = File::open("C:\\Windows\\System32\\ntdll.dll").expect("Failed to open NTDLL");
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer).expect("Failed to read NTDLL");
+
+        // Allocate memory for the DLL
+        let base_address = VirtualAlloc(
+            std::ptr::null_mut(),
+            buffer.len(),
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        );
+        if base_address.is_null() {
+            println!("Failed to allocate memory");
+            return;
+        }
+
+        // Copy the DLL into the allocated memory
+        std::ptr::copy_nonoverlapping(buffer.as_ptr(), base_address as *mut u8, buffer.len());
+
+        // Parse PE structure
+        let dos_header = base_address as *const IMAGE_DOS_HEADER;
+        let nt_headers = (base_address as usize + (*dos_header).e_lfanew as usize) as *const IMAGE_NT_HEADERS;
+        let optional_header = &(*nt_headers).OptionalHeader;
+
+        // Find export directory
+        let export_directory_rva = optional_header.DataDirectory[0].VirtualAddress;
+        let export_directory = (base_address as usize + export_directory_rva as usize) as *const IMAGE_EXPORT_DIRECTORY;
+
+        // Parse export directory
+        let names = (base_address as usize + (*export_directory).AddressOfNames as usize) as *const u32;
+        let functions = (base_address as usize + (*export_directory).AddressOfFunctions as usize) as *const u32;
+        let ordinals = (base_address as usize + (*export_directory).AddressOfNameOrdinals as usize) as *const u16;
+
+        // Find the NtQuerySystemTime function
+        let function_name = "NtQuerySystemTime";
+        let mut function_address = None;
+
+        for i in 0..(*export_directory).NumberOfNames {
+            let name_rva = *names.offset(i as isize);
+            let name = (base_address as usize + name_rva as usize) as *const i8;
+            let name_str = std::ffi::CStr::from_ptr(name).to_str().unwrap_or("");
+
+            if name_str == function_name {
+                let ordinal = *ordinals.offset(i as isize) as usize;
+                let function_rva = *functions.offset(ordinal as isize);
+                function_address = Some(base_address as usize + function_rva as usize);
+                break;
+            }
+        }
+
+        if let Some(function_address) = function_address {
+            println!("NtQuerySystemTime found at offset: 0x{:X}", function_address - base_address as usize);
+
+            // Change memory protection to allow execution
+            let mut old_protect = 0;
+            VirtualProtect(
+                base_address,
+                buffer.len(),
+                PAGE_EXECUTE_READWRITE,
+                &mut old_protect,
+            );
+
+            // Define the function type for NtQuerySystemTime
+            type NtQuerySystemTimeFn = unsafe extern "system" fn(*mut LARGE_INTEGER) -> NTSTATUS;
+            
+            // Cast the function pointer
+            let nt_query_system_time: NtQuerySystemTimeFn = std::mem::transmute(function_address);
+            
+            // Call the function
+            let mut system_time: LARGE_INTEGER = std::mem::zeroed();
+            let status = nt_query_system_time(&mut system_time);
+            
+            if NT_SUCCESS(status.0) {
+                // Convert Windows file time to Unix timestamp
+                let windows_ticks = system_time.QuadPart();
+                let unix_time = windows_ticks / 10_000_000 - 11_644_473_600;
+
+                let system_time = UNIX_EPOCH + Duration::from_secs(unix_time as u64);
+                let datetime: DateTime<Local> = system_time.into();
+
+                println!("Current system time: {}", datetime.format("%Y-%m-%d %H:%M:%S"));
+            } else {
+                println!("Failed to query system time. Status: {:#x}", status.0 as u32);
+            }
+        } else {
+            println!("NtQuerySystemTime function not found");
+        }
+
+        // Free the allocated memory (in a real scenario, you might want to keep it loaded)
+        winapi::um::memoryapi::VirtualFree(base_address, 0, winapi::um::winnt::MEM_RELEASE);
     }
 }
