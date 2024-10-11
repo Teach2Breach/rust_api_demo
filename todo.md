@@ -36,3 +36,10 @@ fn shuffle_memory(current_buffer: *mut c_void, size: usize) -> *mut c_void {
 
 this is for a new method using https://github.com/Teach2Breach/rust_syscalls
 I forked it. I need to test it and then make modifications to it for opsec reasons. Then implement it.
+oh i remember.. what i want to do is create a version that translates the opcodes used in the syscall (the assembly instructions) into virtual opcodes that only our program knows. Then we execute the syscall using those virtual opcodes.
+
+this way, when a program like procmon or any other normal debugger tries to read the memory of the process while our program is running, it will only see the virtual opcodes, and not the actual syscall instructions.
+
+This is what i want to do. I just need to figure out how to do it.
+
+
