@@ -43,7 +43,7 @@ pub extern "system" fn Api() {
         println!("2. Using ntapi crate");
         println!("3. Using GetProcAddress and GetModuleHandleA to get the function pointer and call the API");
         println!("4. Using LdrGetProcedureAddress and LdrGetDllHandle to get the function pointer and call the API");
-        println!("5. Using noldr to get the function pointer and call the API");
+        println!("5. Using noldr (PEB walk) to get the function pointer and call the API");
         println!(
             "6. Copy ntdll.dll to memory and locate functions in it using the ntdll exports table"
         );
