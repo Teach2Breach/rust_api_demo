@@ -5,12 +5,12 @@ This project demonstrates various methods to make Windows API calls in Rust. Eac
 ##### Methods Implemented
 
 1. Using the winapi crate
-2. Using ntapi crate (to be implemented)
-3. Using GetProcAddress and GetModuleHandleA (to be implemented)
-4. Using LdrGetProcedureAddress and LdrGetDllHandle (to be implemented)
-5. Using TEB->PEB->LDR_DATA_TABLE_ENTRY->DllBase (to be implemented)
-6. Using TEB->PEB->LDR_DATA_TABLE_ENTRY->DllBase with assembly syscall (to be implemented)
-7. Using dinvoke_rs (to be implemented)
+2. Using ntapi crate 
+3. Using GetProcAddress and GetModuleHandleA 
+4. Using LdrGetProcedureAddress and LdrGetDllHandle 
+5. Using TEB->PEB->LDR_DATA_TABLE_ENTRY->DllBase 
+6. Copy ntdll from on disk to memory buffer and locate functions by searching the buffer
+7. Copy ntdll from memory buffer to a new buffer in memory and locate functions by searching the buffer
 
 ##### Method 1: Using the winapi crate
 
@@ -56,6 +56,6 @@ This code creates a message box with the title "My first window" and the message
 
 ## Next Steps
 
-Implement and document the remaining methods for making Windows API calls in Rust.
+Document the remaining methods for making Windows API calls in Rust.
 
 
