@@ -18,24 +18,7 @@ use winapi::shared::basetsd::{PSIZE_T, SIZE_T, ULONG_PTR};
 #[no_mangle]
 pub extern "system" fn Api() {
     // in this program, we will demonstrate all the various ways to make windows API calls in rust
-    // we will use the litcrypt crate to encrypt strings
 
-    // below are the methods to make windows API calls which I have already known
-    // 1. using the winapi crate
-    // 2. using ntapi crate
-    // 3. using GetProcAddress and GetModuleHandleA to get the function pointer and call the API
-    // 4. Using LdrGetProcedureAddress and LdrGetDllHandle to get the function pointer and call the API
-    // 5. Using a TEB->PEB->DllBase to get the function pointer and call the NT API
-    // ?. Using a TEB->PEB->DllBase, then use assembly to make a syscall to NT API (this is only working for simple syscalls, will come back to it or add an example later)
-    // 6. copy ntdll.dll to memory and locate functions in it using the ntdll exports table
-    // ?. Using dinvoke_rs and its several methods to make API calls
-
-    //ok end of methods
-
-    //now let's start implementing these methods
-
-    // in this program, we will demonstrate all the various ways to make windows API calls in rust
-    // we will use the litcrypt crate to encrypt strings
 
     loop {
         println!("\nChoose a method to make Windows API calls (or 0 to exit):");
@@ -50,6 +33,9 @@ pub extern "system" fn Api() {
         println!(
             "7. Copy ntdll from memory to a new buffer in memory and get the version of the system"
         );
+        //dinvoke_rs is currently using an old version of windows crate (0.51 vs 0.58) which causes a lot of issues with HANDLEs
+        //println!("8. Using dinvoke_rs to make indirect syscalls");
+        println!("99. Get the version of ntdll.dll");
 
         print!("Enter the number of the method you want to use: ");
         io::stdout().flush().unwrap();
@@ -67,6 +53,7 @@ pub extern "system" fn Api() {
             5 => noldr_ntapi(),
             6 => nt_in_memory(),
             7 => mem_to_mem(),
+            //8 => use_dinvoke_rs(),
             99 => get_ntdll_version(),
             // ... (other cases)
             _ => println!("Invalid choice. Please select a number between 0 and 7."),
@@ -774,3 +761,4 @@ fn mem_to_mem() {
         println!("Failed to free virtual memory. Status: {:#x}", status);
     }
 }
+
