@@ -3,15 +3,9 @@ name = "rust_api_demo"
 version = "0.1.0"
 edition = "2021"
 
-[lib]
-path = "src/lib.rs"
-crate-type = ["staticlib", "cdylib"]
-
 [dependencies]
-litcrypt = "0.3.0"
 winapi = { version = "0.3.9", features = ["winuser", "libloaderapi", "winver", "errhandlingapi", "memoryapi"] }
 ntapi = "0.4.1"
 chrono = "0.4.38"
 windows = { version = "0.58.0", features = ["Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_Kernel"] }
 noldr = { git = "https://github.com/Teach2Breach/noldr.git", branch = "main" }
-dinvoke_rs = "0.2.0"
