@@ -13,3 +13,13 @@ This project demonstrates various methods to make Windows API calls in Rust.
 7. Copy ntdll from memory buffer to a new buffer in memory and locate functions by searching the buffer
 
 I started making this project for a course, but then I got bored and decided to just keep pushing open source projects. So it is structured in a way to provide learners with examples of each method, but this project is not structured to be a useful program on its own or to be used in other projects. Try out the examples, read the code, and snip what you need. Learn how it works.
+
+##### Usage
+
+```bash
+cargo run --release
+```
+
+
+
+
